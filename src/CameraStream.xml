@@ -110,12 +110,6 @@
                 </property>
             </propertyGroup>
         </propertyGroup>
-        <propertyGroup caption="Tensorflow">
-            <property key="objectDetectionEnabled" type="boolean" defaultValue="false">
-                <caption>Object detection enabled</caption>
-                <description />
-            </property>
-        </propertyGroup>
         <propertyGroup caption="Gemini">
             <property key="geminiEnabled" type="boolean" defaultValue="false">
                 <caption>Gemini enabled</caption>

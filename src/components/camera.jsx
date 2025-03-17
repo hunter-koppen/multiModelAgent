@@ -1,22 +1,14 @@
 import { createElement, useRef, useEffect, useState, Fragment } from "react";
 import Webcam from "react-webcam";
-import * as tf from "@tensorflow/tfjs";
-import * as cocoSsd from "@tensorflow-models/coco-ssd";
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
 
 export function Camera(props) {
     const webcamRef = useRef(null);
     const mediaRecorderRef = useRef(null);
-    const [model, setModel] = useState(null);
-    const [detections, setDetections] = useState([]);
-    const [isDetecting, setIsDetecting] = useState(false);
     const [cameraReady, setCameraReady] = useState(false);
     const [isRecording, setIsRecording] = useState(false);
     const [prevStartRecording, setPrevStartRecording] = useState(false);
     const [cameraError, setCameraError] = useState(null);
-
-    // Tenserflow object detection
-    const objectDetectionEnabled = props.objectDetectionEnabled === true;
 
     // Gemini
     const geminiEnabled = props.geminiEnabled === true;
@@ -24,57 +16,6 @@ export function Camera(props) {
     const [geminiResponse, setGeminiResponse] = useState(props.geminiResponseOverride || "");
     const [isGeminiActive, setIsGeminiActive] = useState(props.geminiActiveOverride || false);
     const geminiSessionRef = useRef(null);
-
-    useEffect(() => {
-        if (!objectDetectionEnabled) return;
-
-        const loadModel = async () => {
-            try {
-                const loadedModel = await cocoSsd.load();
-                setModel(loadedModel);
-                console.log("Object detection model loaded");
-            } catch (err) {
-                console.error("Failed to load model:", err);
-            }
-        };
-        loadModel();
-    }, [objectDetectionEnabled]);
-
-    useEffect(() => {
-        if (!objectDetectionEnabled) return;
-
-        let animationFrameId;
-
-        const runDetection = async () => {
-            if (model && webcamRef.current && webcamRef.current.video && isDetecting) {
-                const video = webcamRef.current.video;
-                if (video.readyState !== 4 || !video.videoWidth || !video.videoHeight) {
-                    animationFrameId = requestAnimationFrame(runDetection);
-                    return;
-                }
-                try {
-                    const predictions = await model.detect(video);
-                    setDetections(predictions);
-                    animationFrameId = requestAnimationFrame(runDetection);
-                } catch (error) {
-                    console.error("Detection error:", error);
-                    setTimeout(() => {
-                        animationFrameId = requestAnimationFrame(runDetection);
-                    }, 1000);
-                }
-            }
-        };
-
-        if (isDetecting) {
-            runDetection();
-        }
-
-        return () => {
-            if (animationFrameId) {
-                cancelAnimationFrame(animationFrameId);
-            }
-        };
-    }, [model, isDetecting, objectDetectionEnabled]);
 
     // Gemini initialization
     useEffect(() => {
@@ -155,7 +96,6 @@ export function Camera(props) {
 
     // Gemini frame processing
     useEffect(() => {
-        // Log the current state to help with debugging
         console.log("Gemini frame processing effect running with state:", {
             geminiEnabled,
             isGeminiActive,
@@ -243,49 +183,10 @@ export function Camera(props) {
         cameraReady
     ]);
 
-    const renderDetections = () => {
-        if (!objectDetectionEnabled || !detections.length) return null;
-
-        return (
-            <div style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}>
-                {detections.map((detection, index) => (
-                    <div
-                        key={index}
-                        style={{
-                            position: "absolute",
-                            border: "2px solid #00ff00",
-                            backgroundColor: "rgba(0, 255, 0, 0.2)",
-                            left: `${detection.bbox[0]}px`,
-                            top: `${detection.bbox[1]}px`,
-                            width: `${detection.bbox[2]}px`,
-                            height: `${detection.bbox[3]}px`
-                        }}
-                    >
-                        <span
-                            style={{
-                                position: "absolute",
-                                top: "-1.5em",
-                                backgroundColor: "#00ff00",
-                                padding: "2px 6px",
-                                color: "#fff",
-                                fontSize: "12px"
-                            }}
-                        >
-                            {detection.class} ({Math.round(detection.score * 100)}%)
-                        </span>
-                    </div>
-                ))}
-            </div>
-        );
-    };
-
     const handleUserMedia = () => {
         console.log("Camera stream initialized successfully");
         setCameraError(null);
         setCameraReady(true);
-        if (objectDetectionEnabled) {
-            setIsDetecting(true);
-        }
     };
 
     const handleCameraError = error => {
@@ -478,8 +379,6 @@ export function Camera(props) {
                     style={{ width: "100%", height: "100%", objectFit: "cover" }}
                 />
             )}
-
-            {renderDetections()}
 
             {geminiEnabled && renderGeminiResponse()}
 
