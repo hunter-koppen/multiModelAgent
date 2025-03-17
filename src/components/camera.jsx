@@ -20,6 +20,214 @@ export function Camera(props) {
     const [chatHistory, setChatHistory] = useState([]);
     const [isProcessing, setIsProcessing] = useState(false);
 
+    // Voice
+    const [isListening, setIsListening] = useState(false);
+    const [isSpeaking, setIsSpeaking] = useState(false);
+    const recognitionRef = useRef(null);
+    const utteranceRef = useRef(null);
+
+    // Initialize speech recognition
+    useEffect(() => {
+        if (!geminiEnabled) return;
+
+        try {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (SpeechRecognition) {
+                recognitionRef.current = new SpeechRecognition();
+                recognitionRef.current.continuous = true;
+                recognitionRef.current.interimResults = true;
+                recognitionRef.current.lang = 'en-US';
+
+                recognitionRef.current.onresult = async (event) => {
+                    const transcript = Array.from(event.results)
+                        .map(result => result[0].transcript)
+                        .join('');
+
+                    if (event.results[0].isFinal) {
+                        await handleVoiceInput(transcript);
+                    }
+                };
+
+                recognitionRef.current.onerror = (event) => {
+                    console.error('Speech recognition error:', event.error);
+                    setIsListening(false);
+                };
+            }
+        } catch (error) {
+            console.error('Failed to initialize speech recognition:', error);
+        }
+    }, [geminiEnabled]);
+
+    // Initialize speech synthesis
+    useEffect(() => {
+        if (!geminiEnabled) return;
+
+        try {
+            const SpeechSynthesis = window.speechSynthesis;
+            if (SpeechSynthesis) {
+                utteranceRef.current = new SpeechSynthesisUtterance();
+                utteranceRef.current.onend = () => setIsSpeaking(false);
+            }
+        } catch (error) {
+            console.error('Failed to initialize speech synthesis:', error);
+        }
+    }, [geminiEnabled]);
+
+    // Gemini frame processing
+    useEffect(() => {
+        if (!geminiEnabled || !isGeminiActive || !geminiSessionRef.current || !cameraReady) {
+            return;
+        }
+
+        const frameRate = props.geminiFrameRate || 0.5;
+        const frameDelay = 1000 / frameRate;
+
+        let isFrameProcessingActive = true;
+        let lastFrameContext = null;
+
+        const processFrames = async () => {
+            if (!isFrameProcessingActive || !geminiSessionRef.current) {
+                return;
+            }
+
+            // Skip frame processing if we're currently speaking or listening
+            if (isSpeaking || isListening) {
+                if (isFrameProcessingActive) {
+                    setTimeout(processFrames, frameDelay);
+                }
+                return;
+            }
+
+            try {
+                const screenshot = webcamRef.current?.getScreenshot();
+                if (screenshot) {
+                    const base64Data = screenshot.split(",")[1];
+
+                    if (base64Data !== lastFrameContext) {
+                        lastFrameContext = base64Data;
+
+                        // Send frame without expecting response
+                        await geminiSessionRef.current.sendMessage([
+                            {
+                                inlineData: {
+                                    mimeType: "image/jpeg",
+                                    data: base64Data
+                                }
+                            },
+                            {
+                                text: "This is the current video frame. You are in monitoring mode. Do not respond unless specifically asked or if you detect an important event."
+                            }
+                        ]);
+                    }
+                }
+            } catch (error) {
+                console.error("Gemini frame processing error:", error);
+            }
+
+            if (isFrameProcessingActive) {
+                setTimeout(processFrames, frameDelay);
+            }
+        };
+
+        processFrames();
+
+        return () => {
+            isFrameProcessingActive = false;
+        };
+    }, [geminiEnabled, isGeminiActive, props.geminiFrameRate, cameraReady, isSpeaking, isListening]);
+
+    // Handle voice input
+    const handleVoiceInput = async (transcript) => {
+        if (!geminiSessionRef.current || isProcessing) return;
+
+        setIsProcessing(true);
+        try {
+            // Cancel any ongoing speech when user starts speaking
+            window.speechSynthesis.cancel();
+
+            // Take a fresh screenshot for context
+            const screenshot = webcamRef.current?.getScreenshot();
+            let messageParts = [{ text: transcript }];
+
+            if (screenshot) {
+                const base64Data = screenshot.split(",")[1];
+                messageParts = [
+                    {
+                        inlineData: {
+                            mimeType: "image/jpeg",
+                            data: base64Data
+                        }
+                    },
+                    { text: transcript }
+                ];
+            }
+
+            const result = await geminiSessionRef.current.sendMessage(messageParts);
+            const response = await result.response;
+            const text = response.text();
+
+            if (text) {
+                setGeminiResponse(text);
+                if (props.onGeminiResponse) {
+                    props.onGeminiResponse(text);
+                }
+                // Wait a short moment before speaking to ensure the user has finished
+                setTimeout(() => {
+                    speakResponse(text);
+                }, 500);
+            }
+        } catch (error) {
+            console.error("Error processing voice input:", error);
+            speakResponse("Sorry, I encountered an error processing your request.");
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    // Speak response
+    const speakResponse = (text) => {
+        if (!utteranceRef.current) return;
+
+        // Cancel any ongoing speech
+        window.speechSynthesis.cancel();
+
+        setIsSpeaking(true);
+        utteranceRef.current.text = text;
+        utteranceRef.current.onend = () => {
+            setIsSpeaking(false);
+            // Resume frame processing after speaking is done
+            if (isGeminiActive && !isListening) {
+                processFrames();
+            }
+        };
+
+        // Add interruption handling
+        utteranceRef.current.onpause = () => {
+            setIsSpeaking(false);
+            window.speechSynthesis.cancel();
+        };
+
+        window.speechSynthesis.speak(utteranceRef.current);
+    };
+
+    // Toggle voice input
+    const toggleVoiceInput = () => {
+        if (!recognitionRef.current) return;
+
+        if (isListening) {
+            recognitionRef.current.stop();
+            // Resume frame processing after stopping listening
+            if (isGeminiActive && !isSpeaking) {
+                processFrames();
+            }
+        } else {
+            // Stop any ongoing speech before starting to listen
+            window.speechSynthesis.cancel();
+            recognitionRef.current.start();
+        }
+        setIsListening(!isListening);
+    };
+
     // Gemini initialization
     useEffect(() => {
         if (!geminiEnabled) return;
@@ -54,12 +262,19 @@ export function Camera(props) {
                         {
                             text:
                                 props.geminiInitialPrompt ||
-                                "You are a helpful AI assistant that can analyze video and engage in conversation."
+                                "You are a helpful AI assistant that can analyze video and engage in conversation. You can be interrupted at any time by the user."
                         }
                     ]
                 },
                 generationConfig: {
                     maxOutputTokens: 500
+                },
+                speechConfig: {
+                    voiceConfig: {
+                        prebuiltVoiceConfig: {
+                            voiceName: "Kore"
+                        }
+                    }
                 }
             });
 
@@ -73,98 +288,11 @@ export function Camera(props) {
         }
 
         return () => {
-            if (!cameraReady) return; // Don't clean up if we're just initializing the model
+            if (!cameraReady) return;
             setIsGeminiActive(false);
             geminiSessionRef.current = null;
         };
     }, [geminiEnabled, cameraReady, props.geminiApiKey, props.geminiInitialPrompt]);
-
-    // Gemini frame processing
-    useEffect(() => {
-        console.log("Gemini frame processing effect running with state:", {
-            geminiEnabled,
-            isGeminiActive,
-            hasSession: !!geminiSessionRef.current,
-            cameraReady
-        });
-
-        if (!geminiEnabled || !isGeminiActive || !geminiSessionRef.current || !cameraReady) {
-            console.log("Skipping Gemini frame processing setup - conditions not met");
-            return;
-        }
-
-        console.log("Setting up Gemini frame processing");
-
-        // Calculate delay between frames based on frame rate
-        const frameRate = props.geminiFrameRate || 0.5; // Default to 1 frame every 2 seconds
-        const frameDelay = 1000 / frameRate;
-
-        let isFrameProcessingActive = true;
-        let lastFrameContext = null;
-
-        // Process frames sequentially with proper timing between them
-        const processFrames = async () => {
-            // Stop if component unmounted or conditions no longer valid
-            if (!isFrameProcessingActive || !geminiSessionRef.current) {
-                return;
-            }
-
-            try {
-                // Take screenshot
-                const screenshot = webcamRef.current?.getScreenshot();
-                if (screenshot) {
-                    const base64Data = screenshot.split(",")[1];
-
-                    // Only send frame if it's different from the last one
-                    if (base64Data !== lastFrameContext) {
-                        console.log("Sending new frame to Gemini for context...");
-                        lastFrameContext = base64Data;
-
-                        // Send to Gemini as context and handle response
-                        const result = await geminiSessionRef.current.sendMessage([
-                            {
-                                inlineData: {
-                                    mimeType: "image/jpeg",
-                                    data: base64Data
-                                }
-                            },
-                            {
-                                text: "This is the current video frame. You are in monitoring mode. Do not describe what you see unless specifically asked or if it's relevant to your task. Only respond if you detect a specific event or condition that requires immediate action or communication. Do not send acknowledgments or status updates. Stay silent unless you need to take action."
-                            }
-                        ]);
-
-                        const response = await result.response;
-                        const text = response.text();
-
-                        if (text && text.trim() !== "") {
-                            console.log("Received meaningful response from Gemini:", text);
-                            setChatHistory(prev => [...prev, { role: "assistant", content: text }]);
-                            setGeminiResponse(text);
-                            if (props.onGeminiResponse) {
-                                props.onGeminiResponse(text);
-                            }
-                        }
-                    }
-                }
-            } catch (error) {
-                console.error("Gemini frame processing error:", error);
-            }
-
-            // Schedule next frame with proper delay if still active
-            if (isFrameProcessingActive) {
-                setTimeout(processFrames, frameDelay);
-            }
-        };
-
-        // Start the frame processing
-        processFrames();
-
-        // Cleanup function
-        return () => {
-            console.log("Cleaning up Gemini frame processing");
-            isFrameProcessingActive = false;
-        };
-    }, [geminiEnabled, isGeminiActive, props.geminiFrameRate, cameraReady]);
 
     // Handle user input submission
     const handleUserSubmit = async e => {
@@ -362,91 +490,37 @@ export function Camera(props) {
                 {!isGeminiActive && <div className="gemini-status">Gemini Live inactive</div>}
 
                 {isGeminiActive && (
-                    <div className="gemini-chat">
-                        <div className="gemini-chat-history">
-                            {chatHistory.map((message, index) => (
-                                <div key={index} className={`gemini-message ${message.role}`}>
-                                    <div className="gemini-avatar">
-                                        {message.role === "user" ? "U" : message.role === "system" ? "S" : "G"}
-                                    </div>
-                                    <div className="gemini-message-content">{message.content}</div>
-                                </div>
-                            ))}
-                        </div>
-
-                        <form onSubmit={handleUserSubmit} className="gemini-input-form">
-                            <input
-                                type="text"
-                                value={userInput}
-                                onChange={e => setUserInput(e.target.value)}
-                                placeholder="Ask a question..."
-                                disabled={isProcessing}
-                                className="gemini-input"
-                            />
-                            <button
-                                type="submit"
-                                disabled={isProcessing || !userInput.trim()}
-                                className="gemini-button primary"
-                            >
-                                Send
-                            </button>
-                        </form>
+                    <div className="gemini-controls">
+                        <button
+                            onClick={toggleVoiceInput}
+                            className={`gemini-button ${isListening ? "danger" : "primary"}`}
+                        >
+                            {isListening ? "Stop Listening" : "Start Listening"}
+                        </button>
+                        <button
+                            onClick={() => {
+                                setIsGeminiActive(false);
+                                if (recognitionRef.current) {
+                                    recognitionRef.current.stop();
+                                }
+                                window.speechSynthesis.cancel();
+                            }}
+                            className="gemini-button danger"
+                        >
+                            Stop
+                        </button>
                     </div>
                 )}
 
-                {props.showGeminiControls && (
-                    <div className="gemini-controls">
-                        <button
-                            onClick={() => {
-                                console.log("Clear button clicked");
-                                setGeminiResponse("");
-                                setChatHistory([]);
-                                if (props.onGeminiResponse) {
-                                    props.onGeminiResponse("");
-                                }
-                            }}
-                            className="gemini-button"
-                        >
-                            Clear
-                        </button>
-                        <button
-                            onClick={() => {
-                                console.log("Toggle button clicked, current state:", isGeminiActive);
-                                const newState = !isGeminiActive;
-                                setIsGeminiActive(newState);
+                {isListening && (
+                    <div className="gemini-status">
+                        Listening... Speak now
+                    </div>
+                )}
 
-                                if (newState && geminiModelRef.current && !geminiSessionRef.current) {
-                                    console.log("Restarting Gemini session");
-                                    const startGeminiLiveSession = async () => {
-                                        try {
-                                            const chat = geminiModelRef.current.startChat({
-                                                systemInstruction: {
-                                                    parts: [
-                                                        {
-                                                            text:
-                                                                props.geminiInitialPrompt ||
-                                                                "You are a helpful AI assistant that can analyze video and engage in conversation."
-                                                        }
-                                                    ]
-                                                },
-                                                generationConfig: {
-                                                    maxOutputTokens: 500
-                                                }
-                                            });
-                                            geminiSessionRef.current = chat;
-                                            console.log("Gemini session restarted successfully");
-                                        } catch (error) {
-                                            console.error("Failed to restart Gemini session:", error);
-                                            setGeminiResponse("Failed to start Gemini: " + error.message);
-                                        }
-                                    };
-                                    startGeminiLiveSession();
-                                }
-                            }}
-                            className={`gemini-button ${isGeminiActive ? "danger" : "primary"}`}
-                        >
-                            {isGeminiActive ? "Pause" : "Resume"}
-                        </button>
+                {isSpeaking && (
+                    <div className="gemini-status">
+                        Speaking...
                     </div>
                 )}
             </div>

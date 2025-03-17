@@ -68,8 +68,6 @@
     color: white;
     padding: 12px;
     border-radius: 8px;
-    max-height: 40%;
-    overflow-y: auto;
     z-index: 10;
     transition: all 0.3s ease;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
@@ -78,11 +76,15 @@
 }
 
 .gemini-status {
-    color: #ff6b6b;
-    margin-bottom: 8px;
+    color: #fff;
+    margin: 8px 0;
     font-weight: bold;
     display: flex;
     align-items: center;
+    justify-content: center;
+    padding: 8px;
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
 }
 
 .gemini-status::before {
@@ -91,8 +93,17 @@
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    background-color: #ff6b6b;
     margin-right: 8px;
+}
+
+.gemini-status:has(+ .gemini-status:contains("Listening"))::before {
+    background-color: #4caf50;
+    animation: pulse 1.5s infinite;
+}
+
+.gemini-status:has(+ .gemini-status:contains("Speaking"))::before {
+    background-color: #2196f3;
+    animation: pulse 1.5s infinite;
 }
 
 .gemini-loading {
@@ -153,32 +164,55 @@
 }
 
 .gemini-controls {
-    margin-top: 10px;
     display: flex;
-    justify-content: flex-end;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
-    padding-top: 10px;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 10px;
 }
 
 .gemini-button {
     background-color: transparent;
     border: 1px solid rgba(255, 255, 255, 0.3);
     color: white;
-    padding: 5px 10px;
+    padding: 8px 16px;
     border-radius: 4px;
     cursor: pointer;
-    font-size: 12px;
-    margin-left: 8px;
+    font-size: 14px;
+    transition: all 0.3s ease;
 }
 
 .gemini-button.primary {
-    background-color: #4285f4;
+    background-color: #4caf50;
     border: none;
 }
 
 .gemini-button.danger {
-    background-color: #ff6b6b;
+    background-color: #f44336;
     border: none;
+}
+
+.gemini-button:hover {
+    opacity: 0.9;
+    transform: translateY(-1px);
+}
+
+.gemini-button:active {
+    transform: translateY(0);
+}
+
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+        opacity: 1;
+    }
+    50% {
+        transform: scale(1.2);
+        opacity: 0.7;
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
 }
 
 @keyframes geminiDotPulse {
