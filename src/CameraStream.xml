@@ -120,6 +120,18 @@
                 <description />
                 <returnType type="String" />
             </property>
+            <property key="initialPrompt" type="expression" defaultValue="" required="false">
+                <caption>System prompt</caption>
+                <description>The initial prompt for the Gemini session</description>
+                <returnType type="String" />
+            </property>
+            <property key="geminiMessage" type="attribute" required="false">
+                <caption>Send message</caption>
+                <description>Set this attribute to send a message to Gemini from your code</description>
+                <attributeTypes>
+                    <attributeType name="String" />
+                </attributeTypes>
+            </property>
         </propertyGroup>
     </properties>
 </widget>

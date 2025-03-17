@@ -49,18 +49,14 @@ export function CameraStream(props) {
             onRecordingComplete={handleRecordingComplete}
             audioEnabled={props.audioEnabled?.value ?? true}
             facingMode={props.facingMode?.value ?? "environment"}
-            objectDetectionEnabled={props.objectDetectionEnabled?.value ?? false}
             // Gemini configuration
             geminiEnabled={props.geminiEnabled ?? false}
             geminiApiKey={props.geminiApiKey.value}
-            geminiInitialPrompt={
-                props.geminiInitialPrompt?.value ??
-                "You are a real-time video analyzer. Describe what you see concisely."
-            }
-            geminiFramePrompt={props.geminiFramePrompt?.value ?? "What do you see in this frame?"}
+            geminiInitialPrompt={props.initialPrompt?.value}
             geminiFrameRate={props.geminiFrameRate?.value ?? 0.5}
             showGeminiControls={props.showGeminiControls?.value ?? true}
             onGeminiResponse={handleGeminiResponse}
+            geminiMessage={props.geminiMessage}
         />
     );
 }

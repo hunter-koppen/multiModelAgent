@@ -16,6 +16,9 @@ export function Camera(props) {
     const [geminiResponse, setGeminiResponse] = useState(props.geminiResponseOverride || "");
     const [isGeminiActive, setIsGeminiActive] = useState(props.geminiActiveOverride || false);
     const geminiSessionRef = useRef(null);
+    const [userInput, setUserInput] = useState("");
+    const [chatHistory, setChatHistory] = useState([]);
+    const [isProcessing, setIsProcessing] = useState(false);
 
     // Gemini initialization
     useEffect(() => {
@@ -26,16 +29,13 @@ export function Camera(props) {
             return;
         }
 
-        const initialPrompt =
-            props.geminiInitialPrompt || "You are a real-time video analyzer. Describe what you see concisely.";
-
         try {
             console.log("Initializing Gemini model");
             const genAI = new GoogleGenerativeAI(props.geminiApiKey);
             const model = genAI.getGenerativeModel({
                 model: "gemini-1.5-flash-latest",
                 generationConfig: {
-                    maxOutputTokens: 100
+                    maxOutputTokens: 500
                 },
                 safetySettings: [
                     {
@@ -49,18 +49,17 @@ export function Camera(props) {
 
             console.log("Starting Gemini session");
             const chat = model.startChat({
-                history: [
-                    {
-                        role: "user",
-                        parts: [
-                            {
-                                text: initialPrompt
-                            }
-                        ]
-                    }
-                ],
+                systemInstruction: {
+                    parts: [
+                        {
+                            text:
+                                props.geminiInitialPrompt ||
+                                "You are a helpful AI assistant that can analyze video and engage in conversation."
+                        }
+                    ]
+                },
                 generationConfig: {
-                    maxOutputTokens: 100
+                    maxOutputTokens: 500
                 }
             });
 
@@ -79,20 +78,6 @@ export function Camera(props) {
             geminiSessionRef.current = null;
         };
     }, [geminiEnabled, cameraReady, props.geminiApiKey, props.geminiInitialPrompt]);
-
-    // Gemini timeout if no response
-    useEffect(() => {
-        if (isGeminiActive && !geminiResponse) {
-            const timeoutId = setTimeout(() => {
-                console.log("Gemini response timeout");
-                setGeminiResponse("No response received from Gemini. The API may be unavailable.");
-            }, 15000); // 15 seconds timeout
-
-            return () => {
-                clearTimeout(timeoutId);
-            };
-        }
-    }, [isGeminiActive, geminiResponse]);
 
     // Gemini frame processing
     useEffect(() => {
@@ -113,75 +98,189 @@ export function Camera(props) {
         // Calculate delay between frames based on frame rate
         const frameRate = props.geminiFrameRate || 0.5; // Default to 1 frame every 2 seconds
         const frameDelay = 1000 / frameRate;
-        
+
         let isFrameProcessingActive = true;
-        
+        let lastFrameContext = null;
+
         // Process frames sequentially with proper timing between them
         const processFrames = async () => {
             // Stop if component unmounted or conditions no longer valid
             if (!isFrameProcessingActive || !geminiSessionRef.current) {
                 return;
             }
-            
+
             try {
                 // Take screenshot
                 const screenshot = webcamRef.current?.getScreenshot();
                 if (screenshot) {
                     const base64Data = screenshot.split(",")[1];
-                    console.log("Sending frame to Gemini...");
-                    
-                    // Send to Gemini
-                    const result = await geminiSessionRef.current.sendMessage([
+
+                    // Only send frame if it's different from the last one
+                    if (base64Data !== lastFrameContext) {
+                        console.log("Sending new frame to Gemini for context...");
+                        lastFrameContext = base64Data;
+
+                        // Send to Gemini as context and handle response
+                        const result = await geminiSessionRef.current.sendMessage([
+                            {
+                                inlineData: {
+                                    mimeType: "image/jpeg",
+                                    data: base64Data
+                                }
+                            },
+                            {
+                                text: "This is the current video frame. You are in monitoring mode. Do not describe what you see unless specifically asked or if it's relevant to your task. Only respond if you detect a specific event or condition that requires immediate action or communication. Do not send acknowledgments or status updates. Stay silent unless you need to take action."
+                            }
+                        ]);
+
+                        const response = await result.response;
+                        const text = response.text();
+
+                        if (text && text.trim() !== "") {
+                            console.log("Received meaningful response from Gemini:", text);
+                            setChatHistory(prev => [...prev, { role: "assistant", content: text }]);
+                            setGeminiResponse(text);
+                            if (props.onGeminiResponse) {
+                                props.onGeminiResponse(text);
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error("Gemini frame processing error:", error);
+            }
+
+            // Schedule next frame with proper delay if still active
+            if (isFrameProcessingActive) {
+                setTimeout(processFrames, frameDelay);
+            }
+        };
+
+        // Start the frame processing
+        processFrames();
+
+        // Cleanup function
+        return () => {
+            console.log("Cleaning up Gemini frame processing");
+            isFrameProcessingActive = false;
+        };
+    }, [geminiEnabled, isGeminiActive, props.geminiFrameRate, cameraReady]);
+
+    // Handle user input submission
+    const handleUserSubmit = async e => {
+        e.preventDefault();
+        if (!userInput.trim() || !geminiSessionRef.current || isProcessing) return;
+
+        setIsProcessing(true);
+        const userMessage = userInput.trim();
+        setUserInput("");
+        setChatHistory(prev => [...prev, { role: "user", content: userMessage }]);
+
+        try {
+            // Take a fresh screenshot for context
+            const screenshot = webcamRef.current?.getScreenshot();
+            let messageParts = [{ text: userMessage }];
+
+            if (screenshot) {
+                const base64Data = screenshot.split(",")[1];
+                messageParts = [
+                    {
+                        inlineData: {
+                            mimeType: "image/jpeg",
+                            data: base64Data
+                        }
+                    },
+                    { text: userMessage }
+                ];
+            }
+
+            const result = await geminiSessionRef.current.sendMessage(messageParts);
+            const response = await result.response;
+            const text = response.text();
+
+            setChatHistory(prev => [...prev, { role: "assistant", content: text }]);
+            setGeminiResponse(text);
+            if (props.onGeminiResponse) {
+                props.onGeminiResponse(text);
+            }
+        } catch (error) {
+            console.error("Error sending message to Gemini:", error);
+            const errorMessage = "Error: " + error.message;
+            setChatHistory(prev => [...prev, { role: "assistant", content: errorMessage }]);
+            setGeminiResponse(errorMessage);
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    // Handle code-initiated messages
+    useEffect(() => {
+        if (!props.geminiMessage?.value || !geminiSessionRef.current || isProcessing) return;
+
+        const sendMessage = async () => {
+            setIsProcessing(true);
+            try {
+                // Take a fresh screenshot for context
+                const screenshot = webcamRef.current?.getScreenshot();
+                let messageParts = [{ text: props.geminiMessage.value }];
+
+                if (screenshot) {
+                    const base64Data = screenshot.split(",")[1];
+                    messageParts = [
                         {
                             inlineData: {
                                 mimeType: "image/jpeg",
                                 data: base64Data
                             }
                         },
-                        { text: props.geminiFramePrompt || "What do you see in this frame?" }
-                    ]);
-                    
-                    // Process response
-                    const response = await result.response;
-                    const text = response.text();
-                    console.log("Received Gemini response:", text);
-                    
-                    if (isFrameProcessingActive) {
-                        setGeminiResponse(text);
-                        if (props.onGeminiResponse) {
-                            props.onGeminiResponse(text);
-                        }
-                    }
+                        { text: props.geminiMessage.value }
+                    ];
+                }
+
+                const result = await geminiSessionRef.current.sendMessage(messageParts);
+                const response = await result.response;
+                const text = response.text();
+
+                setChatHistory(prev => [
+                    ...prev,
+                    { role: "system", content: props.geminiMessage.value },
+                    { role: "assistant", content: text }
+                ]);
+                setGeminiResponse(text);
+                if (props.onGeminiResponse) {
+                    props.onGeminiResponse(text);
                 }
             } catch (error) {
-                console.error("Gemini frame processing error:", error);
-                if (isFrameProcessingActive) {
-                    setGeminiResponse("Error analyzing video: " + error.message);
-                }
-            }
-            
-            // Schedule next frame with proper delay if still active
-            if (isFrameProcessingActive) {
-                setTimeout(processFrames, frameDelay);
+                console.error("Error sending system message to Gemini:", error);
+                const errorMessage = "Error: " + error.message;
+                setChatHistory(prev => [
+                    ...prev,
+                    { role: "system", content: props.geminiMessage.value },
+                    { role: "assistant", content: errorMessage }
+                ]);
+                setGeminiResponse(errorMessage);
+            } finally {
+                setIsProcessing(false);
+                props.geminiMessage.setValue(""); // Clear the message after processing
             }
         };
-        
-        // Start the frame processing
-        processFrames();
-        
-        // Cleanup function
-        return () => {
-            console.log("Cleaning up Gemini frame processing");
-            isFrameProcessingActive = false;
-        };
-    }, [
-        geminiEnabled,
-        isGeminiActive,
-        props.geminiFrameRate,
-        props.geminiFramePrompt,
-        props.onGeminiResponse,
-        cameraReady
-    ]);
+
+        sendMessage();
+    }, [props.geminiMessage?.value]);
+
+    // Gemini timeout if no response
+    useEffect(() => {
+        if (isGeminiActive && !geminiResponse) {
+            const timeoutId = setTimeout(() => {
+                console.log("Gemini response timeout");
+                setGeminiResponse("No response received from Gemini. The API may be unavailable.");
+            }, 15000); // 15 seconds timeout
+
+            return () => {
+                clearTimeout(timeoutId);
+            };
+        }
+    }, [isGeminiActive, geminiResponse]);
 
     const handleUserMedia = () => {
         console.log("Camera stream initialized successfully");
@@ -258,33 +357,40 @@ export function Camera(props) {
     const renderGeminiResponse = () => {
         if (!geminiEnabled) return null;
 
-        console.log("Rendering Gemini response:", {
-            isActive: isGeminiActive,
-            hasResponse: !!geminiResponse,
-            responseLength: geminiResponse?.length
-        });
-
         return (
             <div className="gemini-response">
                 {!isGeminiActive && <div className="gemini-status">Gemini Live inactive</div>}
 
-                {isGeminiActive && !geminiResponse && (
-                    <div className="gemini-loading">
-                        <div className="loading-dots">
-                            {[0, 1, 2].map(i => (
-                                <div key={i} className="loading-dot"></div>
+                {isGeminiActive && (
+                    <div className="gemini-chat">
+                        <div className="gemini-chat-history">
+                            {chatHistory.map((message, index) => (
+                                <div key={index} className={`gemini-message ${message.role}`}>
+                                    <div className="gemini-avatar">
+                                        {message.role === "user" ? "U" : message.role === "system" ? "S" : "G"}
+                                    </div>
+                                    <div className="gemini-message-content">{message.content}</div>
+                                </div>
                             ))}
                         </div>
-                        <span>Analyzing video... (API Key: {props.geminiApiKey ? "Provided" : "Missing"})</span>
-                    </div>
-                )}
 
-                {geminiResponse && (
-                    <div className="gemini-content">
-                        <div className="gemini-message">
-                            <div className="gemini-avatar">G</div>
-                            <div>{geminiResponse}</div>
-                        </div>
+                        <form onSubmit={handleUserSubmit} className="gemini-input-form">
+                            <input
+                                type="text"
+                                value={userInput}
+                                onChange={e => setUserInput(e.target.value)}
+                                placeholder="Ask a question..."
+                                disabled={isProcessing}
+                                className="gemini-input"
+                            />
+                            <button
+                                type="submit"
+                                disabled={isProcessing || !userInput.trim()}
+                                className="gemini-button primary"
+                            >
+                                Send
+                            </button>
+                        </form>
                     </div>
                 )}
 
@@ -294,6 +400,7 @@ export function Camera(props) {
                             onClick={() => {
                                 console.log("Clear button clicked");
                                 setGeminiResponse("");
+                                setChatHistory([]);
                                 if (props.onGeminiResponse) {
                                     props.onGeminiResponse("");
                                 }
@@ -313,18 +420,18 @@ export function Camera(props) {
                                     const startGeminiLiveSession = async () => {
                                         try {
                                             const chat = geminiModelRef.current.startChat({
-                                                history: [
-                                                    {
-                                                        role: "user",
-                                                        parts: [
-                                                            {
-                                                                text:
-                                                                    props.geminiInitialPrompt ||
-                                                                    "You are a real-time video analyzer. Describe what you see concisely."
-                                                            }
-                                                        ]
-                                                    }
-                                                ]
+                                                systemInstruction: {
+                                                    parts: [
+                                                        {
+                                                            text:
+                                                                props.geminiInitialPrompt ||
+                                                                "You are a helpful AI assistant that can analyze video and engage in conversation."
+                                                        }
+                                                    ]
+                                                },
+                                                generationConfig: {
+                                                    maxOutputTokens: 500
+                                                }
                                             });
                                             geminiSessionRef.current = chat;
                                             console.log("Gemini session restarted successfully");
